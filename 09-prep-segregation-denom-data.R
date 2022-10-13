@@ -7,36 +7,40 @@ library(tidyverse)
 library(tidybayes)
 library(rstan)
 
-# Filter data to these parameters
-args <- commandArgs(trailingOnly = FALSE)
-msa_name <- args[1]
-age_group <- args[2]
-seg_zone <- as.numeric( args[3] )
+# Loop over these
+MSAs <- c("Houston", "Dallas")
+AGEs <- c("55-64", "65-74", "75-84")
+ZONEs <- c(0, 1)
 
 # Compile Stan model
-rstan_options(auto_write = TRUE)
-mod <- stan_model("stan/pop-interpolation.stan")
+mod <- stan_model("pop-interpolation.stan")
 
-df <- read_csv("Data-Working/zone-analysis-denominator-raw.csv")
-df <- filter(df, Age == age_group &
-                 MSA == msa_name &
-                 zone == seg_zone)
-
-dl <- list(
-    d = df$pop[1],
-    x = df$pop[2:4],
-    s = df$moe[2:4]/1.645,
-    n = length(1999:2019)
-)
-
-dl$idx <- t(data.frame(
-    a = 8:12,
+for (msa_name in seq_along(MSAs)) { 
+    for (age_group in seq_along(AGEs)) {
+        for (seg_zone in seq_along(ZONEs)) {
+            df <- readr::read_csv("zone-analysis-denominator-raw.csv")
+            df <- dplyr::filter(df,
+                                Age == AGEs[age_group] &
+                                MSA == MSAs[msa_name] &
+                                zone == ZONEs[seg_zone]
+                                )
+            
+            dl <- list(
+                d = df$pop[1],
+                x = df$pop[2:4],
+                s = df$moe[2:4]/1.645,
+                n = length(1999:2019)
+            )
+            
+            dl$idx <- t(data.frame(
+                a = 8:12,
     b = 13:17,
     c = 17:21
-    ))
-
+))
+            
 # Draw samples from model
-S <- sampling(mod, dl, iter = 4e3, chains = 4)
+S <- sampling(mod, dl, iter = 3e3, chains = 4, cores = 1,
+              control = list(adapt_delta = .99, max_treedepth = 12))
 
 # Summarize samples
 
@@ -51,9 +55,9 @@ res <- gather_draws(S, pop[id]) %>%
     ) %>%
     transmute(
         Year = Year,
-        MSA = msa_name,
-        Age = age_group,
-        zone = seg_zone,
+        MSA = MSAs[msa_name],
+        Age = AGEs[age_group],
+        zone = ZONEs[seg_zone],
         pop = .value,
         lwr = .lower,
         upr = .upper,
@@ -62,8 +66,8 @@ res <- gather_draws(S, pop[id]) %>%
     ) %>%
     as.data.frame
 
-write_csv(res, paste0("Data-Working/population-estimates/annual-",
-                      paste(msa_name, age_group, seg_zone, sep = "-"),
+write_csv(res, paste0("population-estimates/annual-",
+                      paste(MSAs[msa_name], AGEs[age_group], ZONEs[seg_zone], sep = "-"),
                       ".csv")
           )
 
@@ -96,9 +100,9 @@ res2 <- gather_draws(S, pop[id]) %>%
     mean_qi(pop, .width = .90) %>%
     transmute(
         Period = Period,
-        MSA = msa_name,
-        Age = age_group,
-        zone = seg_zone,
+        MSA = MSAs[msa_name],
+        Age = AGEs[age_group],
+        zone = ZONEs[seg_zone],
         pop = pop,
         lwr = .lower,
         upr = .upper,
@@ -106,12 +110,56 @@ res2 <- gather_draws(S, pop[id]) %>%
         .width = .width
     )
 
-write_csv(res2, paste0("Data-Working/population-estimates/period-",
-                      paste(msa_name, age_group, seg_zone, sep = "-"),
+            write_csv(res2, paste0("population-estimates/period-",
+                                   paste(MSAs[msa_name], AGEs[age_group], ZONEs[seg_zone], sep = "-"),
                       ".csv")
           )
+}}}
+ 
 
+##
+## combine results
+##
 
+## annual
+fs <- list.files("population-estimates", full.names = TRUE, pattern = "annual")
+ds <- lapply(fs, read_csv)
+adf <- bind_rows(ds)
+write_csv(adf, "zone-analysis-annual-population-estimates.csv")
+
+# see results, compare with ACS estimates
+raw.df <- readr::read_csv("zone-analysis-denominator-raw.csv")
+raw.df$Year <- ifelse(raw.df$Period == 2019, 2017, ifelse(raw.df$Period == 2015, 2013, ifelse(raw.df$Period == 2010, 2008, raw.df$Period)))
+raw.df <- transmute(raw.df, Year, MSA, Age, zone, pop, lwr = pop - moe, upr = pop + moe) 
+
+adf %>%
+    ggplot(aes(Year, pop,
+               ymin = lwr, ymax = upr,
+               fill = Age,
+               group = paste(zone, Age, MSA))) +
+    geom_line() +        
+    geom_ribbon(aes(ymin = lwr, ymax= upr),
+                alpha = .75) +
+    geom_linerange(
+        data = raw.df,
+        aes(Year, pop, ymin = lwr, ymax = upr)
+        ) +
+    facet_wrap(~ MSA + zone, scale = "free") +
+    theme_bw()
+
+## period
+fs <- list.files("population-estimates", full.names = TRUE, pattern = "period")
+ds <- lapply(fs, read_csv)
+pdf <- bind_rows(ds)
+
+write_csv(pdf, "zone-analysis-period-population-estimates.csv")
+
+# see results
+pdf %>%
+    ggplot(aes(group = paste(zone, Age, MSA),
+               col = Age)) +
+    geom_pointrange(aes(Period, pop, ymin = lwr, ymax = upr)) +
+    facet_wrap(~ MSA + zone, scale = "free")
 
 
 ## res %>%
@@ -130,3 +178,4 @@ write_csv(res2, paste0("Data-Working/population-estimates/period-",
 ##         breaks = seq(1999, 2019, by = 5)
 ##     ) +
 ##theme_bw()
+
