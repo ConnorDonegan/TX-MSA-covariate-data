@@ -15,7 +15,7 @@ tonio <- data.frame(
     )
 
 houston <- data.frame(
-    County = paste(c("Austin", "Brazoria", "Fort Bend", "Galveston", "Harris", "Liberty", "Montgomery", "Waller"), "County, TX"),
+    County = paste(c("Austin", "Brazoria", "Chambers", "Fort Bend", "Galveston", "Harris", "Liberty", "Montgomery", "Waller"), "County, TX"),
     MSA = "Houston"
    )
 
